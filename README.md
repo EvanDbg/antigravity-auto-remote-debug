@@ -1,76 +1,103 @@
 # Antigravity Remote Debug Injector
 
-通过 DLL 劫持为 Antigravity 应用注入 `--remote-debugging-port` 启动参数，启用 Chrome DevTools 远程调试功能。
+通过 DLL 劫持为 Antigravity 应用自动注入 `--remote-debugging-port` 启动参数，启用 Chrome DevTools 远程调试功能。
 
-## 功能特性
+## 💡 设计初衷
 
-- ✅ 自动注入远程调试端口参数
-- ✅ 通过配置文件自定义端口
-- ✅ 只对主进程注入，子进程不受影响
-- ✅ 无需修改原程序
+Antigravity 使用过程中经常弹出 **"Retry"** 错误窗口，社区已有基于 CDP（Chrome DevTools Protocol）的 Auto-Retry 插件：
 
-## 快速开始
+- [Antigravity Auto-Accept 自动接受和重试插件](https://linux.do/t/topic/1500512)
+- [Antigravity 自动重试插件](https://linux.do/t/topic/1494666)
 
-### 1. 编译
+但这些插件依赖 `--remote-debugging-port` 参数，之前的方案要么修改快捷方式（每次更新失效），要么通过 Antigravity Tools 重启（导致调试端口失效）。
 
-需要 [MinGW-w64](https://winlibs.com/) 编译器。
+**本工具通过 DLL 注入一劳永逸地解决了这个问题** —— 无论通过什么方式启动或重启 Antigravity，远程调试端口都会自动开启。
+
+## ✨ 功能特性
+
+| 功能 | 说明 |
+|------|------|
+| ✅ 自动注入 | 自动添加 `--remote-debugging-port` 参数 |
+| ✅ 端口可配置 | 通过 INI 配置文件自定义调试端口（1-65535） |
+| ✅ 智能过滤 | 只对主进程注入，子进程（渲染进程、GPU 进程等）不受影响 |
+| ✅ 无侵入性 | 无需修改原程序，删除 DLL 即恢复 |
+| ✅ 开箱即用 | 默认使用 9222 端口，零配置即可工作 |
+
+## 🚀 快速开始
+
+### 方式一：直接使用（推荐）
+
+1. 从 [Releases](https://github.com/EvanDbg/antigravity-auto-remote-debug/releases) 下载 `winmm.dll`
+2. 将 `winmm.dll` 复制到 Antigravity 安装目录：
+   ```
+   C:\Users\<用户名>\AppData\Local\Programs\Antigravity\
+   ```
+3. 启动 Antigravity
+4. 浏览器访问 `http://localhost:9222` 验证调试页面列表
+
+### 方式二：自行编译
+
+需要 [MinGW-w64](https://winlibs.com/) 编译器（x64）：
 
 ```batch
+git clone https://github.com/EvanDbg/antigravity-auto-remote-debug.git
+cd antigravity-auto-remote-debug
 build.bat
 ```
 
-### 2. 部署
+## ⚙️ 配置说明
 
-将 `winmm.dll` 复制到 Antigravity 安装目录：
-
-```
-C:\Users\<用户名>\AppData\Local\Programs\Antigravity\
-```
-
-### 3. 配置（可选） --- 不配置的话，默认功能开启并使用9222端口
-
-`antigravity_debug.ini`。
+默认即可使用，无需额外配置。如需自定义，在 Antigravity 安装目录下创建 `antigravity_debug.ini`：
 
 ```ini
 [RemoteDebug]
+; 远程调试端口 (1-65535)
 Port=9222
+
+; 是否启用注入 (1=启用, 0=禁用)
 Enabled=1
 ```
 
-### 4. 验证
-
-1. 启动 Antigravity
-2. 浏览器访问 `http://localhost:9222`
-3. 应显示可调试的页面列表
-
-## 项目结构
+## 📁 项目结构
 
 ```
 ├── src/
-│   ├── main.cpp          # 主逻辑和内联 Hook
-│   ├── exports.cpp       # winmm 函数指针
-│   ├── stubs.S           # 汇编转发跳板
-│   └── config.h          # 配置定义
-├── build.bat             # 编译脚本
-├── antigravity_debug.ini # 配置示例
+│   ├── main.cpp          # 主逻辑：配置加载、内联 Hook、命令行注入
+│   ├── exports.cpp       # winmm 函数指针声明与初始化
+│   ├── stubs.S           # x64 汇编转发跳板（FORWARD_STUB 宏）
+│   └── config.h          # 编译期配置常量
+├── build.bat             # MinGW-w64 编译脚本
+├── antigravity_debug.ini # 配置文件示例
+├── FORUM_POST.md         # 论坛发布帖
 └── README.md
 ```
 
-## 技术原理
+## 🔧 技术原理
 
-1. **DLL 劫持**: Windows 优先加载程序目录下的 DLL
-2. **函数转发**: 将所有 winmm 函数调用转发到系统原版 DLL
-3. **内联 Hook**: 拦截 `kernel32!GetCommandLineW` 修改命令行参数
-4. **进程过滤**: 通过检测 `--type=` 参数识别子进程
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    技术实现流程                              │
+├─────────────────────────────────────────────────────────────┤
+│  1. DLL 劫持   → Windows 优先加载程序目录下的 winmm.dll     │
+│  2. 函数转发   → 将 winmm 函数调用转发到系统原版 DLL        │
+│  3. 内联 Hook  → 拦截 kernel32!GetCommandLineW             │
+│  4. 参数注入   → 在命令行末尾追加调试端口参数               │
+│  5. 进程过滤   → 通过 --type= 参数识别并跳过子进程          │
+└─────────────────────────────────────────────────────────────┘
+```
 
-## 卸载
+核心代码约 200 行 C++，无第三方依赖（不依赖 MinHook 等库），手动实现 x64 内联 Hook（`JMP [RIP+0]` 14 字节跳板）。
 
-删除 Antigravity 目录下的 `winmm.dll` 和 `antigravity_debug.ini`。
+## 🛡️ 安全说明
 
-## 注意事项
+> ⚠️ 由于使用了 DLL 劫持和内联 Hook 技术，可能被杀毒软件误报。代码完全开源透明，如遇误报请将 DLL 添加到白名单。
 
-> ⚠️ 此工具使用 DLL 劫持技术，可能被杀毒软件误报。请将 DLL 添加到白名单。
+## 📦 卸载
 
-## 许可证
+删除 Antigravity 安装目录下的以下文件即可：
+- `winmm.dll`
+- `antigravity_debug.ini`（如有）
+
+## 📜 许可证
 
 MIT License
